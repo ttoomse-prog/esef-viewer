@@ -1,6 +1,6 @@
 """
 Shared loader: takes zip bytes, runs Arelle, returns a DataFrame of facts.
-Cached at session level so all pages share the same loaded data.
+skipDTS=True avoids network calls to ESMA taxonomy servers.
 """
 import os
 import tempfile
@@ -8,93 +8,49 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
-
-# ── ESEF statement classification ─────────────────────────────────────────────
-# Maps common IFRS namespace concept prefixes / names to a statement bucket.
-# Extend as needed.
-
 STATEMENT_MAP = {
-    # Income statement / P&L
-    "Revenue": "Income Statement",
-    "GrossProfit": "Income Statement",
-    "OperatingIncomeLoss": "Income Statement",
-    "ProfitLoss": "Income Statement",
-    "ProfitLossFromOperatingActivities": "Income Statement",
-    "ProfitLossBeforeTax": "Income Statement",
-    "IncomeTaxExpenseContinuingOperations": "Income Statement",
-    "ProfitLossFromContinuingOperations": "Income Statement",
-    "ProfitLossAttributableToOwnersOfParent": "Income Statement",
-    "ProfitLossAttributableToNoncontrollingInterests": "Income Statement",
-    "BasicEarningsLossPerShare": "Income Statement",
-    "DilutedEarningsLossPerShare": "Income Statement",
-    "DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss": "Income Statement",
-    "FinanceCosts": "Income Statement",
-    "FinanceIncome": "Income Statement",
-    "OtherIncome": "Income Statement",
-    "OtherExpenseByFunction": "Income Statement",
-    "DistributionCosts": "Income Statement",
-    "AdministrativeExpense": "Income Statement",
-    "CostOfSales": "Income Statement",
-    # Balance sheet
-    "Assets": "Balance Sheet",
-    "NoncurrentAssets": "Balance Sheet",
-    "CurrentAssets": "Balance Sheet",
-    "Liabilities": "Balance Sheet",
-    "NoncurrentLiabilities": "Balance Sheet",
-    "CurrentLiabilities": "Balance Sheet",
-    "Equity": "Balance Sheet",
-    "EquityAttributableToOwnersOfParent": "Balance Sheet",
-    "NoncontrollingInterests": "Balance Sheet",
-    "CashAndCashEquivalents": "Balance Sheet",
-    "TradeAndOtherCurrentReceivables": "Balance Sheet",
-    "Inventories": "Balance Sheet",
-    "PropertyPlantAndEquipment": "Balance Sheet",
-    "IntangibleAssetsOtherThanGoodwill": "Balance Sheet",
-    "Goodwill": "Balance Sheet",
-    "TradeAndOtherCurrentPayables": "Balance Sheet",
-    "NoncurrentPortionOfNoncurrentBorrowings": "Balance Sheet",
-    "CurrentPortionOfNoncurrentBorrowings": "Balance Sheet",
-    "IssuedCapital": "Balance Sheet",
+    "Revenue": "Income Statement", "GrossProfit": "Income Statement",
+    "OperatingIncomeLoss": "Income Statement", "ProfitLoss": "Income Statement",
+    "ProfitLossFromOperatingActivities": "Income Statement", "ProfitLossBeforeTax": "Income Statement",
+    "IncomeTaxExpenseContinuingOperations": "Income Statement", "ProfitLossFromContinuingOperations": "Income Statement",
+    "ProfitLossAttributableToOwnersOfParent": "Income Statement", "BasicEarningsLossPerShare": "Income Statement",
+    "DilutedEarningsLossPerShare": "Income Statement", "FinanceCosts": "Income Statement",
+    "FinanceIncome": "Income Statement", "DistributionCosts": "Income Statement",
+    "AdministrativeExpense": "Income Statement", "CostOfSales": "Income Statement",
+    "Assets": "Balance Sheet", "NoncurrentAssets": "Balance Sheet", "CurrentAssets": "Balance Sheet",
+    "Liabilities": "Balance Sheet", "NoncurrentLiabilities": "Balance Sheet", "CurrentLiabilities": "Balance Sheet",
+    "Equity": "Balance Sheet", "EquityAttributableToOwnersOfParent": "Balance Sheet",
+    "CashAndCashEquivalents": "Balance Sheet", "TradeAndOtherCurrentReceivables": "Balance Sheet",
+    "Inventories": "Balance Sheet", "PropertyPlantAndEquipment": "Balance Sheet",
+    "IntangibleAssetsOtherThanGoodwill": "Balance Sheet", "Goodwill": "Balance Sheet",
+    "TradeAndOtherCurrentPayables": "Balance Sheet", "IssuedCapital": "Balance Sheet",
     "RetainedEarnings": "Balance Sheet",
-    # Cash flow
-    "CashFlowsFromUsedInOperatingActivities": "Cash Flow",
-    "CashFlowsFromUsedInInvestingActivities": "Cash Flow",
-    "CashFlowsFromUsedInFinancingActivities": "Cash Flow",
-    "IncreaseDecreaseInCashAndCashEquivalents": "Cash Flow",
-    "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": "Cash Flow",
-    "ProceedsFromIssuingShares": "Cash Flow",
-    "DividendsPaidClassifiedAsFinancingActivities": "Cash Flow",
+    "CashFlowsFromUsedInOperatingActivities": "Cash Flow", "CashFlowsFromUsedInInvestingActivities": "Cash Flow",
+    "CashFlowsFromUsedInFinancingActivities": "Cash Flow", "IncreaseDecreaseInCashAndCashEquivalents": "Cash Flow",
     "AdjustmentsForDepreciationAndAmortisationExpense": "Cash Flow",
-    # OCI
-    "OtherComprehensiveIncome": "Other Comprehensive Income",
-    "ComprehensiveIncome": "Other Comprehensive Income",
+    "OtherComprehensiveIncome": "Other Comprehensive Income", "ComprehensiveIncome": "Other Comprehensive Income",
 }
 
-
-def classify_statement(concept_local_name: str) -> str:
-    """Return statement bucket for a concept, or 'Other / Extension'."""
-    if concept_local_name in STATEMENT_MAP:
-        return STATEMENT_MAP[concept_local_name]
-    # Heuristic keyword matching
-    name_lower = concept_local_name.lower()
-    if any(k in name_lower for k in ["revenue", "profit", "loss", "income", "expense", "earnings", "ebit", "ebitda", "sales", "cost"]):
+def classify_statement(name):
+    if name in STATEMENT_MAP:
+        return STATEMENT_MAP[name]
+    n = name.lower()
+    if any(k in n for k in ["revenue","profit","loss","income","expense","earnings","ebit","sales","cost"]):
         return "Income Statement"
-    if any(k in name_lower for k in ["asset", "liabilit", "equity", "cash", "inventor", "payable", "receivable", "goodwill", "capital", "reserve", "borrowing"]):
+    if any(k in n for k in ["asset","liabilit","equity","cash","inventor","payable","receivable","goodwill","capital","reserve","borrowing"]):
         return "Balance Sheet"
-    if any(k in name_lower for k in ["cashflow", "cash flow", "operating activit", "investing activit", "financing activit"]):
+    if any(k in n for k in ["cashflow","cash flow","operating activit","investing activit","financing activit"]):
         return "Cash Flow"
     return "Other / Extension"
 
-
-def find_entry_point(extract_dir: str) -> str | None:
-    """Find the iXBRL / XBRL entry point inside an ESEF package."""
+def find_entry_point(extract_dir):
     for root, dirs, files in os.walk(extract_dir):
         for f in files:
-            if f.endswith(('.xhtml', '.htm', '.html')) and 'report' in root.lower():
+            if f.endswith(('.xhtml','.htm','.html')) and 'report' in root.lower():
                 return os.path.join(root, f)
     for root, dirs, files in os.walk(extract_dir):
         for f in files:
-            if f.endswith(('.xhtml', '.htm', '.html')):
+            if f.endswith(('.xhtml','.htm','.html')):
                 return os.path.join(root, f)
     for root, dirs, files in os.walk(extract_dir):
         for f in files:
@@ -102,15 +58,9 @@ def find_entry_point(extract_dir: str) -> str | None:
                 return os.path.join(root, f)
     return None
 
-
 @st.cache_data(show_spinner=False)
-def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
-    """
-    Load an ESEF zip via Arelle and return (facts_df, log_messages, metadata).
-    Cached so all pages share the result without re-processing.
-    """
+def load_facts(zip_bytes):
     from arelle import Cntlr, ModelManager
-
     logs = []
     meta = {}
 
@@ -118,7 +68,6 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
         zip_path = os.path.join(tmpdir, "report.zip")
         with open(zip_path, "wb") as f:
             f.write(zip_bytes)
-
         extract_dir = os.path.join(tmpdir, "extracted")
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_dir)
@@ -126,11 +75,11 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
         entry = find_entry_point(extract_dir)
         if not entry:
             raise FileNotFoundError("Could not find an XBRL/iXBRL entry point in the zip.")
-
         logs.append(f"Entry point: {os.path.relpath(entry, extract_dir)}")
 
         cntlr = Cntlr.Cntlr(logFileName="logToStdErr")
         model_manager = ModelManager.initialize(cntlr)
+        model_manager.skipDTS = True  # avoids ESMA taxonomy network calls
         model_xbrl = model_manager.load(entry)
 
         if model_xbrl is None:
@@ -138,74 +87,91 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
 
         rows = []
         for fact in model_xbrl.facts:
-            concept = fact.concept
-            if concept is None:
-                continue
+            try:
+                concept = fact.concept
+                if concept is not None:
+                    local_name = concept.qname.localName
+                    ns = concept.qname.namespaceURI or ""
+                    try:
+                        label = concept.label(lang="en") or local_name
+                    except Exception:
+                        label = local_name
+                else:
+                    local_name = fact.qname.localName
+                    ns = fact.qname.namespaceURI or ""
+                    label = local_name
+            except Exception:
+                try:
+                    local_name = fact.qname.localName
+                    ns = ""
+                    label = local_name
+                except Exception:
+                    continue
 
             try:
-                label = concept.label(lang="en") or concept.qname.localName
+                ctx = fact.context
+                if ctx is None:
+                    period_type = period_start = period_end = ""
+                elif ctx.isInstantPeriod:
+                    period_type = "instant"
+                    period_start = ""
+                    period_end = str(ctx.instantDatetime.date()) if ctx.instantDatetime else ""
+                elif ctx.isStartEndPeriod:
+                    period_type = "duration"
+                    period_start = str(ctx.startDatetime.date()) if ctx.startDatetime else ""
+                    period_end = str(ctx.endDatetime.date()) if ctx.endDatetime else ""
+                else:
+                    period_type = "forever"
+                    period_start = period_end = ""
             except Exception:
-                label = concept.qname.localName
-
-            ctx = fact.context
-            if ctx is None:
+                ctx = None
                 period_type = period_start = period_end = ""
-            elif ctx.isInstantPeriod:
-                period_type = "instant"
-                period_start = ""
-                period_end = str(ctx.instantDatetime.date()) if ctx.instantDatetime else ""
-            elif ctx.isStartEndPeriod:
-                period_type = "duration"
-                period_start = str(ctx.startDatetime.date()) if ctx.startDatetime else ""
-                period_end = str(ctx.endDatetime.date()) if ctx.endDatetime else ""
-            else:
-                period_type = "forever"
-                period_start = period_end = ""
 
-            unit = fact.unit
             unit_str = ""
-            if unit is not None:
-                try:
+            try:
+                unit = fact.unit
+                if unit is not None:
                     unit_str = str(unit.value)
-                except Exception:
-                    unit_str = str(unit)
+            except Exception:
+                pass
 
             dims = {}
-            if ctx is not None:
-                for dim_qname, dim_val in ctx.qnameDims.items():
-                    dim_name = dim_qname.localName
-                    try:
-                        dims[dim_name] = dim_val.memberQname.localName if dim_val.isExplicit else str(dim_val.typedMember)
-                    except Exception:
-                        dims[dim_name] = str(dim_val)
+            try:
+                if ctx is not None:
+                    for dq, dv in ctx.qnameDims.items():
+                        try:
+                            dims[dq.localName] = dv.memberQname.localName if dv.isExplicit else str(dv.typedMember)
+                        except Exception:
+                            dims[dq.localName] = str(dv)
+            except Exception:
+                pass
 
+            value = ""
             try:
                 value = fact.value
-            except (KeyError, AttributeError, Exception):
+            except Exception:
                 try:
-                    value = fact.text
+                    value = fact.text or ""
                 except Exception:
-                    value = ""
+                    pass
 
-            local_name = concept.qname.localName
-            ns = concept.qname.namespaceURI or ""
+            entity = ""
+            try:
+                if ctx and ctx.entityIdentifier:
+                    entity = ctx.entityIdentifier[1]
+            except Exception:
+                pass
 
             rows.append({
-                "Concept": local_name,
-                "Label": label,
-                "Namespace": ns,
+                "Concept": local_name, "Label": label, "Namespace": ns,
                 "Statement": classify_statement(local_name),
-                "Period Type": period_type,
-                "Period Start": period_start,
-                "Period End": period_end,
-                "Value": value,
-                "Unit": unit_str,
-                "Decimals": fact.decimals or "",
-                "Entity": ctx.entityIdentifier[1] if ctx and ctx.entityIdentifier else "",
+                "Period Type": period_type, "Period Start": period_start, "Period End": period_end,
+                "Value": value, "Unit": unit_str,
+                "Decimals": getattr(fact, "decimals", "") or "",
+                "Entity": entity,
                 "Dimensions": "; ".join(f"{k}={v}" for k, v in dims.items()) if dims else "",
             })
 
-        # Grab entity name if available
         try:
             for ctx in model_xbrl.contexts.values():
                 if ctx.entityIdentifier:
@@ -217,18 +183,16 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
         logs.append(f"Facts found: {len(rows)}")
         model_manager.close()
 
-    COLUMNS = ["Concept", "Label", "Namespace", "Statement", "Period Type",
-               "Period Start", "Period End", "Value", "Unit", "Decimals",
-               "Entity", "Dimensions"]
+    COLUMNS = ["Concept","Label","Namespace","Statement","Period Type",
+               "Period Start","Period End","Value","Unit","Decimals","Entity","Dimensions"]
 
     if not rows:
         df = pd.DataFrame(columns=COLUMNS)
         df["_numeric"] = pd.Series(dtype=float)
+        logs.append("Warning: no facts could be extracted.")
         return df, logs, meta
 
     df = pd.DataFrame(rows, columns=COLUMNS)
-
     df["Value"] = pd.to_numeric(df["Value"], errors="ignore")
     df["_numeric"] = pd.to_numeric(df["Value"], errors="coerce")
-
     return df, logs, meta
