@@ -181,8 +181,11 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
 
             try:
                 value = fact.value
-            except Exception:
-                value = ""
+            except (KeyError, AttributeError, Exception):
+                try:
+                    value = fact.text
+                except Exception:
+                    value = ""
 
             local_name = concept.qname.localName
             ns = concept.qname.namespaceURI or ""
@@ -211,17 +214,21 @@ def load_facts(zip_bytes: bytes) -> tuple[pd.DataFrame, list[str], dict]:
         except Exception:
             pass
 
+        logs.append(f"Facts found: {len(rows)}")
         model_manager.close()
 
-    df = pd.DataFrame(rows)
+    COLUMNS = ["Concept", "Label", "Namespace", "Statement", "Period Type",
+               "Period Start", "Period End", "Value", "Unit", "Decimals",
+               "Entity", "Dimensions"]
 
-    def try_numeric(v):
-        try:
-            return pd.to_numeric(v)
-        except Exception:
-            return v
+    if not rows:
+        df = pd.DataFrame(columns=COLUMNS)
+        df["_numeric"] = pd.Series(dtype=float)
+        return df, logs, meta
 
-    df["Value"] = df["Value"].apply(try_numeric)
+    df = pd.DataFrame(rows, columns=COLUMNS)
+
+    df["Value"] = pd.to_numeric(df["Value"], errors="ignore")
     df["_numeric"] = pd.to_numeric(df["Value"], errors="coerce")
 
     return df, logs, meta
