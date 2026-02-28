@@ -1,4 +1,0 @@
-arelle-release
-streamlit
-pandas
-plotly
