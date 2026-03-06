@@ -2,3 +2,4 @@ arelle-release
 streamlit
 pandas
 plotly
+beautifulsoup4
