@@ -2,7 +2,19 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+meta = st.session_state.get("esef_meta", {})
+filename = st.session_state.get("esef_filename", "")
+entity_id = meta.get("entity_id", "")
 
+# Try to get company name from text sections if available
+company_name = ""
+text_df = st.session_state.get("esef_text_df")
+if text_df is not None and not text_df.empty:
+    # Pull from filename as fallback label
+    pass
+
+display_name = entity_id or filename or "Unknown company"
+st.caption(f"📂 {display_name}")
 st.set_page_config(page_title="Dashboard – ESEF Viewer", page_icon="📊", layout="wide")
 
 st.markdown("""
